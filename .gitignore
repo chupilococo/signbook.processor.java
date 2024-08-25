@@ -24,3 +24,5 @@ hs_err_pid*
 replay_pid*
 Archivo de entrada.txt
 signBook.processor.log.lck
+/entrada
+config/config.properties
