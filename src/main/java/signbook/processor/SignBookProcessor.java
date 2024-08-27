@@ -12,6 +12,7 @@ import com.mongodb.client.model.Updates;
 import java.io.*;
 import java.nio.charset.Charset;
 import java.nio.file.*;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Properties;
@@ -108,23 +109,42 @@ public class SignBookProcessor {
             if (filesToProcess.cursor().hasNext()) {
                 for (Document doc : filesToProcess) {
                     logger.log(Level.INFO, "Procesando archivo {0}", doc.get("filename"));
-                    documents_meta_collection.updateOne(Filters.eq("_id", doc.get("_id")), Updates.set("status", "in process"));
+                    updateDMStatus(doc.getObjectId("_id"), "in process");
                     try {
-                        processFile(Paths.get(config.getProperty("input.dir"), doc.get("filename").toString()), doc.getObjectId("_id"));
+                        processFile(
+                                Paths.get(config.getProperty("input.dir"), doc.get("filename").toString()),
+                                doc.getObjectId("_id"),
+                                doc.getString("page_break"));
+                        updateDMStatus(doc.getObjectId("_id"), "Finished Ok");
+                        logger.log(Level.INFO, "Finalizando archivos {0}", doc.get("filename"));
                     } catch (IOException ex) {
+                        updateDMStatus(doc.getObjectId("_id"), "Error");
                         logger.log(Level.SEVERE, "error:", ex);
                     }
-                    logger.log(Level.INFO, "Archivo Procesado");
                 }
             } else {
                 logger.log(Level.INFO, "sin archivos para procesar");
             }
-
         }
     }
 
-    private void processFile(Path inputFilePath, ObjectId documentId) throws IOException {
+    private void updateDMStatus(ObjectId documentID, String status) {
+        documents_meta_collection.updateOne(
+                Filters.eq("_id", documentID),
+                Updates.set("status", status)
+        );
+    }
+
+    private void updateDMActivity(ObjectId documentID, Document activity) {
+        documents_meta_collection.updateOne(
+                Filters.eq("_id", documentID),
+                Updates.push("activity", activity)
+        );
+    }
+
+    private void processFile(Path inputFilePath, ObjectId documentId, String page_breack) throws IOException {
         ArrayList<String> lines = new ArrayList<>();
+        String startTime = LocalDateTime.now().toString();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(new FileInputStream(inputFilePath.toFile()), Charset.forName(inputEncoding))
         );) {
@@ -132,7 +152,7 @@ public class SignBookProcessor {
             int pageNum = 0;
             boolean firstLine = true;
             while ((line = reader.readLine()) != null) {
-                if (line.startsWith("1") && !lines.isEmpty()) {
+                if (line.equals(page_breack) && !lines.isEmpty()) {
                     insertPage(lines, documentId, pageNum);
                     pageNum++;
                     lines.clear();
@@ -145,6 +165,14 @@ public class SignBookProcessor {
                 lines.add(line);
             }
             insertPage(lines, documentId, pageNum);
+            documents_meta_collection.updateOne(
+                    Filters.eq("_id", documentId),
+                    Updates.set("ocurrence_publication", pageNum + 1));
+            String endTime = LocalDateTime.now().toString();
+            updateDMActivity(documentId, new Document()
+                    .append("action", "Publication")
+                    .append("start_time", startTime)
+                    .append("end_time", endTime));
         }
     }
 
