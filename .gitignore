@@ -27,3 +27,4 @@ signBook.processor.log.lck
 /entrada
 config/config.properties
 target/maven-archiver/pom.properties
+/target
