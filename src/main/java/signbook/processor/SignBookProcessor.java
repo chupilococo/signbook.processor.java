@@ -60,12 +60,12 @@ public class SignBookProcessor {
 
         String mongoUrl = System.getenv("DB_URL");
         if (mongoUrl == null) {
-            mongoUrl = config.getProperty("mongo.uri", "mongodb://localhost:27017/librub");
+            mongoUrl = config.getProperty("mongo.uri");
         }
         ConnectionString connectionString = new ConnectionString(mongoUrl);
         MongoClientSettings settings = MongoClientSettings.builder().applyConnectionString(connectionString).build();
         MongoClient mongoClient = MongoClients.create(settings);
-        MongoDatabase database = mongoClient.getDatabase(config.getProperty("mongo.db.name", "librub"));
+        MongoDatabase database = mongoClient.getDatabase(config.getProperty("mongo.db.name"));
         documents_meta_collection = database.getCollection("documents_meta");
         pages_collection = database.getCollection("pages");
     }
