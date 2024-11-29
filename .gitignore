@@ -28,3 +28,4 @@ signBook.processor.log.lck
 config/config.properties
 target/maven-archiver/pom.properties
 /target
+config/config.properties
