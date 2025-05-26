@@ -66,7 +66,7 @@ public class SignBookProcessor {
         if (mongoUrl == null) {
             mongoUrl = config.getProperty("mongo.uri");
         }
-        logger.info("Conectando a MongoDB en: " + mongoUrl);
+        logger.log(Level.INFO, "Conectando a MongoDB en: {0}", mongoUrl);
         ConnectionString connectionString = new ConnectionString(mongoUrl);
         MongoClientSettings settings = MongoClientSettings.builder().applyConnectionString(connectionString).build();
         MongoClient mongoClient = MongoClients.create(settings);
@@ -103,21 +103,21 @@ public class SignBookProcessor {
     }
 
     public void start() {
-        logger.info("Iniciando tarea programada para procesamiento de archivos cada " + pollingInterval + "ms...");
+        logger.log(Level.INFO, "Iniciando tarea programada para procesamiento de archivos cada {0}ms...", pollingInterval);
         Timer timer = new Timer();
         timer.schedule(new FileProcessorTask(), 0, pollingInterval);
     }
 
- void insertPage(ArrayList<String> lines, ObjectId documentId, int pageNum, Document indexes) {
-    Document page = new Document()
-            .append("lines", new JSONArray(lines.toArray()))
-            .append("documentId", documentId)
-            .append("number", pageNum)
-            .append("createdAt", new Date())
-            .append("indexes", indexes); // 🔹 Agregar los índices extraídos
+    void insertPage(ArrayList<String> lines, ObjectId documentId, int pageNum, Document indexes) {
+        Document page = new Document()
+                .append("lines", new JSONArray(lines.toArray()))
+                .append("documentId", documentId)
+                .append("number", pageNum)
+                .append("createdAt", new Date())
+                .append("indexes", indexes); // 🔹 Agregar los índices extraídos
 
-    pages_collection.insertOne(page);
-}
+        pages_collection.insertOne(page);
+    }
 
     private class FileProcessorTask extends TimerTask {
 
@@ -162,133 +162,142 @@ public class SignBookProcessor {
         );
     }
 
-private void processFile(Path inputFilePath, ObjectId documentId, String page_break) throws IOException {
-    logger.info("Iniciando procesamiento del archivo: " + inputFilePath.getFileName());
-    ArrayList<String> lines = new ArrayList<>();
-    String startTime = LocalDateTime.now().toString();
-    int pageNum = 0;
-    boolean firstLine = true;
+    private void processFile(Path inputFilePath, ObjectId documentId, String page_break) throws IOException {
+        logger.log(Level.INFO, "Iniciando procesamiento del archivo: {0}", inputFilePath.getFileName());
+        ArrayList<String> lines = new ArrayList<>();
+        String startTime = LocalDateTime.now().toString();
+        int pageNum = 0;
+        boolean firstLine = true;
 
-    // 🔹 Obtener `bookId` desde `documents_meta`
-    Document docMeta = documents_meta_collection.find(Filters.eq("_id", documentId)).first();
-    if (docMeta == null || !docMeta.containsKey("book")) {
-        logger.severe("No se encontró el documento en documents_meta o no tiene asociado un bookId.");
-        return;
+        // 🔹 Obtener `bookId` desde `documents_meta`
+        Document docMeta = documents_meta_collection.find(Filters.eq("_id", documentId)).first();
+        if (docMeta == null || !docMeta.containsKey("book")) {
+            logger.severe("No se encontró el documento en documents_meta o no tiene asociado un bookId.");
+            return;
+        }
+        ObjectId bookId = docMeta.getObjectId("book");
+
+        // 🔹 Obtener `indexes` desde `books`
+        Document book = books_collection.find(Filters.eq("_id", bookId)).first();
+        Document indexConfig = (book != null) ? (Document) book.get("indexes") : new Document();
+
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(inputFilePath.toFile()), Charset.forName(inputEncoding))
+        )) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.equals(page_break) && !lines.isEmpty()) {
+                    logger.log(Level.FINE, "P\u00e1gina {0} detectada. Insertando en MongoDB...", pageNum);
+
+                    // 🔹 Extraer índices de la página usando la configuración de `books`
+                    Document extractedIndexes = extractIndexes(lines, indexConfig);
+
+                    insertPage(lines, documentId, pageNum, extractedIndexes);
+                    pageNum++;
+                    lines.clear();
+                    continue;
+                }
+                if (firstLine) {
+                    firstLine = false;
+                    continue;
+                }
+                lines.add(line);
+            }
+
+            // Procesar última página
+            Document extractedIndexes = extractIndexes(lines, indexConfig);
+            insertPage(lines, documentId, pageNum, extractedIndexes);
+
+            logger.log(Level.INFO, "\u00daltima p\u00e1gina {0} insertada en sistema.", pageNum);
+
+            documents_meta_collection.updateOne(
+                    Filters.eq("_id", documentId),
+                    Updates.set("ocurrence_publication", pageNum + 1));
+            String endTime = LocalDateTime.now().toString();
+            updateDMActivity(documentId, new Document()
+                    .append("action", "Publication")
+                    .append("start_time", startTime)
+                    .append("end_time", endTime));
+            logger.log(Level.INFO, "Procesamiento finalizado para archivo: {0}", inputFilePath.getFileName());
+
+        } catch (IOException e) {
+            logger.log(Level.SEVERE, "Error procesando archivo: " + inputFilePath.getFileName(), e);
+            throw e;
+        }
+
+        moveToProcessedDir(inputFilePath);
     }
-    ObjectId bookId = docMeta.getObjectId("book");
 
-    // 🔹 Obtener `indexes` desde `books`
-    Document book = books_collection.find(Filters.eq("_id", bookId)).first();
-    Document indexConfig = (book != null) ? (Document) book.get("indexes") : new Document();
+    private Document extractIndexes(List<String> lines, Document indexConfig) {
+        Document extractedIndexes = new Document();
+        boolean extractIndex = true;
+        for (String indexKey : indexConfig.keySet()) {
+            Document configuration = (Document) indexConfig.get(indexKey);
 
-    try (BufferedReader reader = new BufferedReader(
-            new InputStreamReader(new FileInputStream(inputFilePath.toFile()), Charset.forName(inputEncoding))
-    )) {
-        String line;
-        while ((line = reader.readLine()) != null) {
-            if (line.equals(page_break) && !lines.isEmpty()) {
-                logger.fine("Página " + pageNum + " detectada. Insertando en MongoDB...");
-
-                // 🔹 Extraer índices de la página usando la configuración de `books`
-                Document extractedIndexes = extractIndexes(lines, indexConfig);
-
-                insertPage(lines, documentId, pageNum, extractedIndexes);
-                pageNum++;
-                lines.clear();
+            if (configuration == null) {
                 continue;
             }
-            if (firstLine) {
-                firstLine = false;
+
+            // ✅ Verificar que cada campo existe antes de accederlo
+            Document lineRange = configuration.get("line_range", Document.class);
+            Document position = configuration.get("position", Document.class);
+            String patternStr = configuration.getString("pattern");
+            String endPatternStr = configuration.getString("end_pattern");
+
+            if (lineRange == null || position == null || patternStr == null) {
                 continue;
             }
-            lines.add(line);
-        }
 
-        // Procesar última página
-        Document extractedIndexes = extractIndexes(lines, indexConfig);
-        insertPage(lines, documentId, pageNum, extractedIndexes);
+            Integer startLine = lineRange.getInteger("start");
+            Integer endLine = lineRange.getInteger("end");
+            Integer startPos = position.getInteger("start");
+            Integer endPos = position.getInteger("end");
 
-        logger.info("Última página " + pageNum + " insertada en sistema.");
+            if (startLine == null || endLine == null || startPos == null || endPos == null || patternStr.isEmpty()) {
+                continue;
+            }
 
-        documents_meta_collection.updateOne(
-                Filters.eq("_id", documentId),
-                Updates.set("ocurrence_publication", pageNum + 1));
-        String endTime = LocalDateTime.now().toString();
-        updateDMActivity(documentId, new Document()
-                .append("action", "Publication")
-                .append("start_time", startTime)
-                .append("end_time", endTime));
-        logger.info("Procesamiento finalizado para archivo: " + inputFilePath.getFileName());
+            Pattern pattern = Pattern.compile(patternStr);
+            Pattern endPattern = null;
+            if (endPatternStr != null) {
+                endPattern = Pattern.compile(endPatternStr);
+            }
+            List<String> indexValues = new ArrayList<>();
 
-    } catch (IOException e) {
-        logger.log(Level.SEVERE, "Error procesando archivo: " + inputFilePath.getFileName(), e);
-        throw e;
-    }
+            // Recorrer las líneas dentro del rango definido en MongoDB
+            for (int i = startLine; i <= endLine && i < lines.size(); i++) {
+                String line = lines.get(i).trim(); // Quitar espacios antes y después
 
-    moveToProcessedDir(inputFilePath);
-}
+                if (endPattern != null) {
+                    extractIndex = !endPattern.matcher(line).matches();
+                }
 
-private Document extractIndexes(List<String> lines, Document indexConfig) {
-    Document extractedIndexes = new Document();
+                // Asegurar que la línea tiene suficiente longitud
+                if (line.length() >= endPos) {
+                    String extractedValue = line.substring(startPos, endPos).trim(); // Extraer y limpiar espacios
 
-    for (String indexKey : indexConfig.keySet()) {
-        Document config = (Document) indexConfig.get(indexKey);
-
-        if (config == null) {
-            continue;
-        }
-
-        // ✅ Verificar que cada campo existe antes de accederlo
-        Document lineRange = config.get("line_range", Document.class);
-        Document position = config.get("position", Document.class);
-        String patternStr = config.getString("pattern");
-
-        if (lineRange == null || position == null || patternStr == null) {
-            continue;
-        }
-
-        Integer startLine = lineRange.getInteger("start");
-        Integer endLine = lineRange.getInteger("end");
-        Integer startPos = position.getInteger("start");
-        Integer endPos = position.getInteger("end");
-
-        if (startLine == null || endLine == null || startPos == null || endPos == null || patternStr.isEmpty()) {
-            continue;
-        }
-
-        Pattern pattern = Pattern.compile(patternStr);
-        List<String> indexValues = new ArrayList<>();
-
-        // Recorrer las líneas dentro del rango definido en MongoDB
-        for (int i = startLine; i <= endLine && i < lines.size(); i++) {
-            String line = lines.get(i).trim(); // Quitar espacios antes y después
-
-            // Asegurar que la línea tiene suficiente longitud
-            if (line.length() >= endPos) {
-                String extractedValue = line.substring(startPos, endPos).trim(); // Extraer y limpiar espacios
-
-                // Validar con regex
-                if (pattern.matcher(extractedValue).matches() && !indexValues.contains(extractedValue)) {
-                    indexValues.add(extractedValue); // Agregar solo valores únicos
+                    // Validar con regex
+                    if (!extractIndex && pattern.matcher(extractedValue).matches() && !indexValues.contains(extractedValue)) {
+                        indexValues.add(extractedValue); // Agregar solo valores únicos
+                    }
                 }
             }
+
+            extractedIndexes.append(indexKey, indexValues);
         }
 
-        extractedIndexes.append(indexKey, indexValues);
+        return extractedIndexes;
     }
 
-    return extractedIndexes;
-}
-
-private void moveToProcessedDir(Path inputFilePath) {
-    try {
-        Path processedFilePath = Paths.get(config.getProperty("processed.dir"), inputFilePath.getFileName().toString());
-        Files.move(inputFilePath, processedFilePath, StandardCopyOption.REPLACE_EXISTING);
-        logger.info("✅ Archivo movido a la carpeta de procesados: " + processedFilePath);
-    } catch (IOException e) {
-        logger.log(Level.SEVERE, "❌ Error al mover el archivo a la carpeta de procesados: " + inputFilePath.getFileName(), e);
+    private void moveToProcessedDir(Path inputFilePath) {
+        try {
+            Path processedFilePath = Paths.get(config.getProperty("processed.dir"), inputFilePath.getFileName().toString());
+            Files.move(inputFilePath, processedFilePath, StandardCopyOption.REPLACE_EXISTING);
+            logger.log(Level.INFO, "\u2705 Archivo movido a la carpeta de procesados: {0}", processedFilePath);
+        } catch (IOException e) {
+            logger.log(Level.SEVERE, "❌ Error al mover el archivo a la carpeta de procesados: " + inputFilePath.getFileName(), e);
+        }
     }
-}
 
     public static void main(String[] args) {
         logger.info("Iniciando aplicación SignBookProcessor...");
