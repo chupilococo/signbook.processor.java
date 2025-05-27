@@ -31,7 +31,6 @@ public class SignBookProcessor {
     private static final Logger logger = Logger.getLogger(SignBookProcessor.class.getName());
     private Properties config;
     private String inputEncoding;
-    private String processedDir;
     private long pollingInterval;
     private MongoCollection<Document> books_collection;
     private MongoCollection<Document> documents_meta_collection;
@@ -50,7 +49,7 @@ public class SignBookProcessor {
         config.load(new FileInputStream("config/config.properties"));
 
         config.getProperty("input.dir");
-        processedDir = config.getProperty("processed.dir");  // 🔹 Se usa processedDir en lugar de output.dir
+        config.getProperty("processed.dir");  // 🔹 Se usa processedDir en lugar de output.dir
         config.getProperty("error.dir");
         config.getProperty("temp.extension", ".tmp");
         config.getProperty("final.extension", ".txt");
