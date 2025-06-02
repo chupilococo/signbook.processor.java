@@ -112,8 +112,10 @@ public class SignBookProcessor {
                 .append("lines", new JSONArray(lines.toArray()))
                 .append("documentId", documentId)
                 .append("number", pageNum)
-                .append("createdAt", new Date())
-                .append("indexes", indexes); // 🔹 Agregar los índices extraídos
+                .append("createdAt", new Date());
+        if (indexes != null) {
+            page.append("indexes", indexes); // 🔹 Agregar los índices extraídos
+        }
 
         pages_collection.insertOne(page);
     }
@@ -178,7 +180,7 @@ public class SignBookProcessor {
 
         // 🔹 Obtener `indexes` desde `books`
         Document book = books_collection.find(Filters.eq("_id", bookId)).first();
-        Document indexConfig = (book != null) ? (Document) book.get("indexes") : new Document();
+        Document indexConfig = (book != null) ? (Document) book.get("indexes") : null;
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(new FileInputStream(inputFilePath.toFile()), Charset.forName(inputEncoding))
@@ -228,6 +230,9 @@ public class SignBookProcessor {
     }
 
     private Document extractIndexes(List<String> lines, Document indexConfig) {
+        if (indexConfig == null) {
+            return null;
+        }
         Document extractedIndexes = new Document();
         boolean extractIndex = true;
         for (String indexKey : indexConfig.keySet()) {
